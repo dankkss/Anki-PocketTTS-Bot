@@ -1,199 +1,186 @@
 """
-Motor de Síntese de Voz (TTS) com suporte a Clonagem (Pocket TTS) e Vozes de Estúdio (Edge-TTS).
-Otimizado para baixo consumo de memória e execução em CPU.
+Motor de Síntese de Voz (Dual Engine) para Cartões Anki:
+1. Edge-TTS (Microsoft): Vozes de estúdio ultrarrápidas (<1s), 100+ idiomas, controle de velocidade.
+2. Pocket TTS (Kyutai): Clonagem de voz zero-shot a partir de áudios de 5-10s (.safetensors).
 """
-
 import os
+import re
 import gc
-import shutil
 import asyncio
+import logging
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Optional, Tuple, List, Dict
 
-from config import VOICE_PROFILES_DIR, TEMP_DIR
+import edge_tts
+from config import VOICE_PROFILES_DIR, TEMP_AUDIO_DIR
 
-# Catálogo de vozes nativas de estúdio recomendadas para o Anki
-NATIVE_VOICES = {
-    "en_us_aria": {"name": "Aria (EUA - Didática/Clara)", "voice": "en-US-AriaNeural", "lang": "Inglês (EUA)"},
-    "en_us_jenny": {"name": "Jenny (EUA - Conversação)", "voice": "en-US-JennyNeural", "lang": "Inglês (EUA)"},
-    "en_us_guy": {"name": "Guy (EUA - Masculina)", "voice": "en-US-GuyNeural", "lang": "Inglês (EUA)"},
-    "en_gb_sonia": {"name": "Sonia (Reino Unido)", "voice": "en-GB-SoniaNeural", "lang": "Inglês (UK)"},
-    "en_gb_ryan": {"name": "Ryan (Reino Unido - Masc)", "voice": "en-GB-RyanNeural", "lang": "Inglês (UK)"},
-    "es_es_elvira": {"name": "Elvira (Espanha)", "voice": "es-ES-ElviraNeural", "lang": "Espanhol"},
-    "fr_fr_denise": {"name": "Denise (França)", "voice": "fr-FR-DeniseNeural", "lang": "Francês"},
-    "de_de_katja": {"name": "Katja (Alemanha)", "voice": "de-DE-KatjaNeural", "lang": "Alemão"},
-    "it_it_elsa": {"name": "Elsa (Itália)", "voice": "it-IT-ElsaNeural", "lang": "Italiano"},
-    "ja_jp_nanami": {"name": "Nanami (Japão)", "voice": "ja-JP-NanamiNeural", "lang": "Japonês"},
-    "pt_br_francisca": {"name": "Francisca (Brasil)", "voice": "pt-BR-FranciscaNeural", "lang": "Português (BR)"},
-    "pt_br_antonio": {"name": "Antônio (Brasil - Masc)", "voice": "pt-BR-AntonioNeural", "lang": "Português (BR)"},
+logger = logging.getLogger("anki_tts.engine")
+
+# Vozes de estúdio recomendadas para estudo de idiomas e cartões Anki
+EDGE_VOICES: Dict[str, Dict[str, str]] = {
+    "en-US-AriaNeural": {"lang": "Inglês (EUA)", "name": "Aria (EUA - Didática/Clara)"},
+    "en-US-JennyNeural": {"lang": "Inglês (EUA)", "name": "Jenny (EUA - Conversação)"},
+    "en-US-GuyNeural": {"lang": "Inglês (EUA)", "name": "Guy (EUA - Masculina)"},
+    "en-GB-SoniaNeural": {"lang": "Inglês (Reino Unido)", "name": "Sonia (Reino Unido)"},
+    "en-GB-RyanNeural": {"lang": "Inglês (Reino Unido)", "name": "Ryan (Reino Unido - Masc)"},
+    "es-ES-ElviraNeural": {"lang": "Espanhol (Espanha)", "name": "Elvira (Espanha)"},
+    "es-MX-DaliaNeural": {"lang": "Espanhol (México)", "name": "Dalia (México)"},
+    "fr-FR-DeniseNeural": {"lang": "Francês (França)", "name": "Denise (França)"},
+    "de-DE-KatjaNeural": {"lang": "Alemão (Alemanha)", "name": "Katja (Alemanha)"},
+    "it-IT-ElsaNeural": {"lang": "Italiano (Itália)", "name": "Elsa (Itália)"},
+    "ja-JP-NanamiNeural": {"lang": "Japonês (Japão)", "name": "Nanami (Japão)"},
+    "pt-BR-FranciscaNeural": {"lang": "Português (Brasil)", "name": "Francisca (Brasil)"},
+    "pt-BR-AntonioNeural": {"lang": "Português (Brasil)", "name": "Antônio (Brasil - Masc)"},
 }
 
-# Tenta carregar Pocket TTS sob demanda para economizar RAM inicial
-_pocket_model = None
+# Mapeamento de velocidades para Edge-TTS
+SPEED_RATES = {
+    "0.8x": "-20%",
+    "1.0x": "+0%",
+    "1.2x": "+20%"
+}
 
+# Inicialização resiliente do Pocket TTS
+try:
+    from pocket_tts import TTSModel, export_model_state
+    POCKET_AVAILABLE = True
+except ImportError:
+    POCKET_AVAILABLE = False
+    TTSModel = None
+    export_model_state = None
+
+_pocket_model_instance = None
 
 def get_pocket_model():
-    """Carrega o modelo Pocket TTS em modo preguiçoso (lazy loading) na CPU."""
-    global _pocket_model
-    if _pocket_model is None:
+    """Retorna o modelo Pocket TTS em modo singleton."""
+    global _pocket_model_instance
+    if not POCKET_AVAILABLE:
+        return None
+    if _pocket_model_instance is None:
         try:
-            import torch
-            from pocket_tts import TTSModel
-            # Força modo inferência e CPU para economizar memória
-            torch.set_grad_enabled(False)
-            _pocket_model = TTSModel.load_model()
-        except ImportError:
-            _pocket_model = None
+            logger.info("Carregando modelo Pocket TTS...")
+            _pocket_model_instance = TTSModel.load_model()
+            logger.info("Modelo Pocket TTS carregado com sucesso.")
         except Exception as e:
-            print(f"[PocketTTS] Erro ao carregar modelo: {e}")
-            _pocket_model = None
-    return _pocket_model
+            logger.error("Erro ao carregar modelo Pocket TTS: %s", e)
+            return None
+    return _pocket_model_instance
 
+def sanitize_slug(text: str) -> str:
+    """Gera um slug amigável para o nome do arquivo MP3."""
+    clean = re.sub(r"[^\w\s-]", "", text.strip().lower())
+    slug = re.sub(r"[-\s]+", "_", clean)[:30]
+    return slug or "anki_audio"
 
-def convert_audio_to_wav(input_path: Path, output_wav: Path) -> bool:
-    """Converte qualquer formato de áudio (OGG/MP3/M4A) para WAV 16kHz mono via ffmpeg."""
+async def synthesize_edge_tts(text: str, voice: str, speed: str, output_path: str) -> bool:
+    """Gera áudio .mp3 via Edge-TTS."""
     try:
-        cmd = [
-            "ffmpeg", "-y", "-i", str(input_path),
-            "-ar", "16000", "-ac", "1",
-            str(output_wav)
-        ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        return output_wav.exists()
+        rate = SPEED_RATES.get(speed, "+0%")
+        selected_voice = voice if voice in EDGE_VOICES else "en-US-AriaNeural"
+        communicate = edge_tts.Communicate(text=text, voice=selected_voice, rate=rate)
+        await communicate.save(output_path)
+        return os.path.exists(output_path) and os.path.getsize(output_path) > 0
     except Exception as e:
-        print(f"[FFmpeg] Erro na conversão para WAV: {e}")
+        logger.error("Erro no Edge-TTS: %s", e)
         return False
 
+def _process_pocket_cloning(clean_wav_path: str, safetensors_path: str) -> bool:
+    """Extrai o voice_state e exporta para .safetensors (síncrono/CPU)."""
+    model = get_pocket_model()
+    if not model:
+        raise RuntimeError("Pocket TTS não está disponível ou falhou ao inicializar.")
+    voice_state = model.get_state_for_audio_prompt(clean_wav_path)
+    export_model_state(voice_state, safetensors_path)
+    return os.path.exists(safetensors_path)
 
-def convert_wav_to_mp3(input_wav: Path, output_mp3: Path) -> bool:
-    """Converte WAV para MP3 leve com qualidade 192k."""
+async def clone_pocket_voice(audio_input_path: str, profile_name: str) -> Tuple[bool, str]:
+    """
+    Converte áudio recebido para WAV 16kHz mono e salva o perfil de voz (.safetensors).
+    """
+    if not POCKET_AVAILABLE:
+        return False, "O motor Pocket TTS não está instalado neste ambiente. Utilize as vozes Edge-TTS."
+
+    clean_name = sanitize_slug(profile_name)
+    target_safetensors = VOICE_PROFILES_DIR / f"{clean_name}.safetensors"
+    clean_wav = TEMP_AUDIO_DIR / f"prep_{clean_name}.wav"
+
     try:
+        # Converter para WAV 16kHz Mono usando ffmpeg
         cmd = [
-            "ffmpeg", "-y", "-i", str(input_wav),
+            "ffmpeg", "-y", "-i", audio_input_path,
+            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+            str(clean_wav)
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            logger.error("Falha ao converter áudio via ffmpeg: %s", stderr.decode())
+            return False, "Erro ao converter formato do áudio de entrada."
+
+        # Extrair e salvar perfil via threadpool
+        success = await asyncio.to_thread(_process_pocket_cloning, str(clean_wav), str(target_safetensors))
+        if success:
+            return True, clean_name
+        return False, "Falha ao gerar o arquivo de estado da voz clonada."
+    except Exception as e:
+        logger.error("Erro na clonagem Pocket TTS: %s", e)
+        return False, f"Falha na clonagem: {str(e)}"
+    finally:
+        if clean_wav.exists():
+            try:
+                clean_wav.unlink()
+            except Exception:
+                pass
+        gc.collect()
+
+def _process_pocket_synthesis(safetensors_path: str, text: str, temp_wav_path: str) -> bool:
+    """Sintetiza voz clonada e grava WAV temporário (síncrono/CPU)."""
+    import scipy.io.wavfile
+    model = get_pocket_model()
+    if not model:
+        raise RuntimeError("Pocket TTS não está disponível.")
+    voice_state = model.get_state_for_audio_prompt(safetensors_path)
+    audio = model.generate_audio(voice_state, text)
+    scipy.io.wavfile.write(temp_wav_path, model.sample_rate, audio.numpy())
+    return os.path.exists(temp_wav_path)
+
+async def synthesize_pocket_tts(text: str, profile_name: str, output_mp3_path: str) -> bool:
+    """Gera áudio .mp3 a partir de perfil clonado Pocket TTS."""
+    safetensors_path = VOICE_PROFILES_DIR / f"{profile_name}.safetensors"
+    if not safetensors_path.exists():
+        logger.warning("Perfil %s não encontrado em %s", profile_name, safetensors_path)
+        return False
+
+    temp_wav = TEMP_AUDIO_DIR / f"temp_gen_{profile_name}.wav"
+    try:
+        # Gera WAV
+        await asyncio.to_thread(_process_pocket_synthesis, str(safetensors_path), text, str(temp_wav))
+        
+        # Converte WAV para MP3 192kbps para o Anki
+        cmd = [
+            "ffmpeg", "-y", "-i", str(temp_wav),
             "-codec:a", "libmp3lame", "-b:a", "192k",
-            str(output_mp3)
+            output_mp3_path
         ]
-        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        return output_mp3.exists()
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        await proc.communicate()
+        return os.path.exists(output_mp3_path) and os.path.getsize(output_mp3_path) > 0
     except Exception as e:
-        print(f"[FFmpeg] Erro na conversão para MP3: {e}")
+        logger.error("Erro na síntese Pocket TTS: %s", e)
         return False
+    finally:
+        if temp_wav.exists():
+            try:
+                temp_wav.unlink()
+            except Exception:
+                pass
+        gc.collect()
 
-
-class TTSEngine:
-    """Orquestrador unificado de TTS para o Anki."""
-
-    @staticmethod
-    def list_cloned_voices() -> List[str]:
-        """Retorna a lista de nomes de perfis de voz clonados (.safetensors)."""
-        if not VOICE_PROFILES_DIR.exists():
-            return []
-        return sorted([f.stem for f in VOICE_PROFILES_DIR.glob("*.safetensors")])
-
-    @staticmethod
-    def list_native_voices() -> Dict[str, Dict]:
-        """Retorna o catálogo de vozes de estúdio pré-configuradas."""
-        return NATIVE_VOICES
-
-    @staticmethod
-    async def clone_voice_from_audio(input_audio_path: Path, voice_name: str) -> Optional[Path]:
-        """
-        Extrai o perfil de voz (.safetensors) a partir de uma amostra de áudio (5-10s).
-        Salva em data/voice_profiles/<voice_name>.safetensors.
-        """
-        model = get_pocket_model()
-        if model is None:
-            raise RuntimeError("Pocket TTS não está instalado ou disponível no ambiente.")
-
-        safe_name = "".join(c for c in voice_name.lower() if c.isalnum() or c in ("_", "-"))
-        if not safe_name:
-            safe_name = "voz_clonada"
-
-        wav_path = TEMP_DIR / f"{safe_name}_ref.wav"
-        out_safetensors = VOICE_PROFILES_DIR / f"{safe_name}.safetensors"
-
-        try:
-            # 1. Converte áudio de entrada para WAV 16kHz
-            if not convert_audio_to_wav(input_audio_path, wav_path):
-                raise RuntimeError("Falha ao converter áudio de referência para WAV 16kHz.")
-
-            # 2. Executa a extração em thread separada para não travar o loop assíncrono
-            def _extract():
-                from pocket_tts import export_model_state
-                state = model.get_state_for_audio_prompt(str(wav_path))
-                export_model_state(state, str(out_safetensors))
-
-            await asyncio.to_thread(_extract)
-            return out_safetensors if out_safetensors.exists() else None
-
-        finally:
-            if wav_path.exists():
-                wav_path.unlink(missing_ok=True)
-            gc.collect()
-
-    @staticmethod
-    async def generate_cloned(text: str, voice_name: str, output_path: Path) -> bool:
-        """Gera áudio usando um perfil de voz clonado do Pocket TTS."""
-        model = get_pocket_model()
-        if model is None:
-            raise RuntimeError("Pocket TTS não está disponível no servidor.")
-
-        safetensors_path = VOICE_PROFILES_DIR / f"{voice_name}.safetensors"
-        if not safetensors_path.exists():
-            raise FileNotFoundError(f"Perfil de voz '{voice_name}' não encontrado.")
-
-        temp_wav = TEMP_DIR / f"{output_path.stem}_temp.wav"
-
-        try:
-            def _generate():
-                import scipy.io.wavfile
-                voice_state = model.get_state_for_audio_prompt(str(safetensors_path))
-                audio = model.generate_audio(voice_state, text)
-                scipy.io.wavfile.write(str(temp_wav), model.sample_rate, audio.numpy())
-
-            await asyncio.to_thread(_generate)
-
-            if temp_wav.exists():
-                # Converte para MP3 final
-                ok = convert_wav_to_mp3(temp_wav, output_path)
-                return ok
-            return False
-
-        finally:
-            if temp_wav.exists():
-                temp_wav.unlink(missing_ok=True)
-            gc.collect()
-
-    @staticmethod
-    async def generate_native(text: str, voice_key: str, speed_multiplier: float, output_path: Path) -> bool:
-        """Gera áudio instantâneo com Edge-TTS da Microsoft."""
-        try:
-            import edge_tts
-        except ImportError:
-            raise RuntimeError("edge-tts não está instalado no ambiente.")
-
-        voice_info = NATIVE_VOICES.get(voice_key, NATIVE_VOICES["en_us_aria"])
-        voice_id = voice_info["voice"]
-
-        # Calcula o rate string (ex: -20%, +0%, +20%)
-        rate_percent = int(round((speed_multiplier - 1.0) * 100))
-        rate_str = f"{rate_percent:+d}%"
-
-        temp_audio = TEMP_DIR / f"{output_path.stem}_native.mp3"
-
-        communicate = edge_tts.Communicate(text, voice_id, rate=rate_str)
-        await communicate.save(str(temp_audio))
-
-        if temp_audio.exists():
-            shutil.move(str(temp_audio), str(output_path))
-            return True
-        return False
-
-    @staticmethod
-    async def synthesize(text: str, mode: str, voice: str, speed: float, output_path: Path) -> bool:
-        """Ponto de entrada unificado para síntese."""
-        if mode == "cloned":
-            return await TTSEngine.generate_cloned(text, voice, output_path)
-        else:
-            return await TTSEngine.generate_native(text, voice, speed, output_path)
+def list_cloned_voices() -> List[str]:
+    """Lista todos os perfis clonados disponíveis no disco."""
+    return [p.stem for p in VOICE_PROFILES_DIR.glob("*.safetensors")]
