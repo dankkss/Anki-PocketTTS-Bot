@@ -19,6 +19,7 @@ from tts_engine import (
 
 logger = logging.getLogger("anki_tts.bot")
 TELEGRAM_API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
+COLAB_NOTEBOOK_URL = "https://colab.research.google.com/github/dankkss/Anki-PocketTTS-Bot/blob/main/notebooks/Clonador_PocketTTS_Anki.ipynb"
 
 # Persistência leve de configurações do usuário
 def load_all_settings() -> Dict[str, Any]:
@@ -142,40 +143,49 @@ async def tg_download_file(file_id: str, destination_path: str) -> bool:
     return False
 
 # Roteamento de Comandos e Ações
+async def send_colab_cloning_guide(chat_id: int):
+    msg = (
+        "🎙️ <b>Clonagem de Voz & Geração para o Anki</b>\n\n"
+        "O modelo neural de clonagem (Pocket TTS) necessita de <b>1.5 GB de RAM</b>. "
+        "No plano gratuito do Render (512 MB), rodar o modelo causou alertas de memória por e-mail e reinício do contêiner.\n\n"
+        "⚡ <b>Solução Oficial (Google Colab Gratuito):</b>\n"
+        "Configuramos um caderno oficial no <b>Google Colab</b> (12 GB de RAM + GPU T4 Gratuita) onde não há limite de memória:\n\n"
+        f"👉 <a href=\"{COLAB_NOTEBOOK_URL}\"><b>Abrir Clonador no Google Colab</b></a>\n\n"
+        "<b>Recursos no Colab:</b>\n"
+        "• Clona qualquer voz de áudio/microfone em ~5 segundos\n"
+        "• Gera áudios individuais ou de teste\n"
+        "• <b>Super Lote:</b> Cole 50 ou 100 frases e baixe todos os .mp3 compactados em .zip de uma vez para o Anki!\n\n"
+        "💡 <i>Aqui no Telegram, você pode continuar gerando cartões com as mais de 400 vozes de estúdio do /vozes (Edge-TTS), que geram instantaneamente sem nenhum consumo de memória.</i>"
+    )
+    await tg_send_message(chat_id, msg)
+
 async def handle_start(chat_id: int):
     msg = (
-        "<b>Pocket Anki TTS Bot</b>\n\n"
-        "Gere arquivos .mp3 limpos e rápidos para os seus cartões do Anki.\n\n"
+        "👋 <b>Olá! Eu sou o Pocket Anki TTS Bot.</b>\n\n"
+        "Gero áudios em <code>.mp3</code> com qualidade de estúdio e tamanho leve para seus cartões do Anki.\n\n"
         "<b>Como usar:</b>\n"
         "1. <b>Texto para Áudio:</b> Envie qualquer palavra ou frase e receba o .mp3 imediatamente.\n"
-        "2. <b>Clonagem de Voz:</b>\n"
-        "• Grave ou envie um áudio (5 a 10s de fala clara).\n"
-        "• Em seguida, responda ao áudio com: <code>/clonar nome_da_voz</code> (ou simplesmente envie o comando logo após o áudio).\n\n"
+        "2. <b>Vozes de Estúdio:</b> Mais de 400 vozes neurais da Microsoft (Edge-TTS) em 100+ idiomas e sotaques.\n"
+        "3. <b>Clonagem de Voz:</b> Utilize nosso caderno no Google Colab para clonar sua voz e gerar lotes inteiros de cartões.\n\n"
         "<b>Comandos:</b>\n"
-        "• /vozes — Alternar entre vozes de estúdio (Edge-TTS) e vozes clonadas (Pocket TTS)\n"
+        "• /vozes — Escolher voz de estúdio ou abrir o clonador Colab\n"
         "• /velocidade — Ajustar velocidade da fala (0.8x, 1.0x, 1.2x)\n"
         "• /status — Exibir configurações atuais do bot\n"
+        "• /clonar — Informações e link direto para o clonador no Google Colab\n"
         "• /ajuda — Ver estas instruções novamente"
     )
     await tg_send_message(chat_id, msg)
 
 async def handle_status(chat_id: int):
     cfg = get_user_config(chat_id)
-    cloned = list_cloned_voices()
-    engine = cfg["engine"]
-    
-    if engine == "edge-tts":
-        voice_info = EDGE_VOICES.get(cfg["edge_voice"], {}).get("name", cfg["edge_voice"])
-        active_desc = f"Edge-TTS ({voice_info})"
-    else:
-        active_desc = f"Pocket TTS (Perfil: {cfg.get('pocket_voice') or 'Nenhum'})"
+    voice_info = EDGE_VOICES.get(cfg.get("edge_voice", DEFAULT_EDGE_VOICE), {}).get("name", cfg.get("edge_voice"))
 
     msg = (
         "<b>Status e Configurações Atuais:</b>\n\n"
-        f"• <b>Motor Ativo:</b> <code>{active_desc}</code>\n"
+        f"• <b>Motor Ativo:</b> <code>Edge-TTS ({voice_info})</code>\n"
         f"• <b>Velocidade:</b> <code>{cfg['speed']}</code>\n"
-        f"• <b>Perfis Clonados:</b> <code>{len(cloned)} salvos</code>\n"
-        f"• <b>Pocket TTS:</b> <code>{'Ativo' if POCKET_AVAILABLE else 'Indisponível no host'}</code>\n\n"
+        "• <b>Servidor Render:</b> <code>Estável (~35 MB RAM, 0% OOM)</code>\n"
+        "• <b>Clonagem de Voz:</b> <code>Google Colab (12 GB RAM / GPU)</code>\n\n"
         "Use /vozes ou /velocidade para alterar."
     )
     await tg_send_message(chat_id, msg)
@@ -194,13 +204,11 @@ async def handle_velocidade_menu(chat_id: int):
 
 async def handle_vozes_menu(chat_id: int):
     buttons = [
-        [{"text": "🎙️ Vozes de Estúdio (Edge-TTS)", "callback_data": "menu:edge"}]
+        [{"text": "🎙️ Vozes de Estúdio (Edge-TTS)", "callback_data": "menu:edge"}],
+        [{"text": "🧬 Clonagem de Voz (Google Colab)", "callback_data": "menu:colab_info"}]
     ]
-    if POCKET_AVAILABLE:
-        buttons.append([{"text": "🧬 Vozes Clonadas (Pocket TTS)", "callback_data": "menu:pocket"}])
-        
     keyboard = {"inline_keyboard": buttons}
-    await tg_send_message(chat_id, "Selecione o catálogo de vozes:", reply_markup=keyboard)
+    await tg_send_message(chat_id, "Selecione a opção desejada:", reply_markup=keyboard)
 
 async def handle_callback_query(callback_data: str, callback_id: str, chat_id: int):
     await tg_answer_callback(callback_id)
@@ -220,6 +228,10 @@ async def handle_callback_query(callback_data: str, callback_id: str, chat_id: i
         await tg_send_message(chat_id, "Escolha a voz de estúdio (Edge-TTS):", reply_markup=keyboard)
         return
 
+    if callback_data == "menu:colab_info":
+        await send_colab_cloning_guide(chat_id)
+        return
+
     if callback_data.startswith("vedge:"):
         voice_id = callback_data.split(":", 1)[1]
         update_user_config(chat_id, engine="edge-tts", edge_voice=voice_id)
@@ -227,27 +239,6 @@ async def handle_callback_query(callback_data: str, callback_id: str, chat_id: i
         await tg_send_message(chat_id, f"Voz ativada: <b>{name}</b> (Edge-TTS)")
         return
 
-    if callback_data == "menu:pocket":
-        cloned = list_cloned_voices()
-        if not cloned:
-            await tg_send_message(
-                chat_id,
-                "Nenhum perfil de voz clonado ainda.\n\n"
-                "Para clonar, envie um áudio com a legenda:\n<code>/clonar meu_nome</code>"
-            )
-            return
-        buttons = []
-        for profile in cloned:
-            buttons.append([{"text": f"🧬 {profile}", "callback_data": f"vpocket:{profile}"}])
-        keyboard = {"inline_keyboard": buttons}
-        await tg_send_message(chat_id, "Escolha a voz clonada (Pocket TTS):", reply_markup=keyboard)
-        return
-
-    if callback_data.startswith("vpocket:"):
-        profile = callback_data.split(":", 1)[1]
-        update_user_config(chat_id, engine="pocket-tts", pocket_voice=profile)
-        await tg_send_message(chat_id, f"Perfil clonado ativado: <b>{profile}</b> (Pocket TTS)")
-        return
 
 async def process_text_synthesis(chat_id: int, text: str):
     clean_text = text.strip()
@@ -298,40 +289,7 @@ async def process_text_synthesis(chat_id: int, text: str):
         await tg_send_message(chat_id, "Ocorreu um erro ao gerar o áudio. Tente novamente.")
 
 async def process_audio_cloning(chat_id: int, file_id: str, profile_name: str):
-    if not POCKET_AVAILABLE:
-        await tg_send_message(chat_id, "O motor Pocket TTS não está habilitado neste servidor.")
-        return
-
-    clean_profile = sanitize_slug(profile_name)
-    if not clean_profile:
-        await tg_send_message(chat_id, "Nome de perfil inválido. Exemplo: <code>/clonar professor</code>")
-        return
-
-    await tg_send_message(chat_id, f"Processando clonagem de voz para o perfil: <b>{clean_profile}</b>...")
-    temp_input = str(TEMP_AUDIO_DIR / f"raw_clone_{chat_id}_{int(time.time())}.ogg")
-
-    downloaded = await tg_download_file(file_id, temp_input)
-    if not downloaded:
-        await tg_send_message(chat_id, "Falha ao baixar o áudio do Telegram. Envie novamente.")
-        return
-
-    ok, result = await clone_pocket_voice(temp_input, clean_profile)
-    if os.path.exists(temp_input):
-        try:
-            os.unlink(temp_input)
-        except Exception:
-            pass
-
-    if ok:
-        update_user_config(chat_id, engine="pocket-tts", pocket_voice=result)
-        await tg_send_message(
-            chat_id,
-            f"✅ <b>Voz clonada com sucesso!</b>\n\n"
-            f"Perfil <code>{result}</code> salvo e ativado como sua voz atual no Pocket TTS.\n"
-            f"Envie qualquer texto agora para testar sua voz no Anki!"
-        )
-    else:
-        await tg_send_message(chat_id, f"Falha na clonagem: {result}")
+    await send_colab_cloning_guide(chat_id)
 
 # Ponto de entrada de atualizações do Webhook
 async def handle_telegram_update(update: dict):
@@ -357,43 +315,7 @@ async def handle_telegram_update(update: dict):
         if text:
             cmd = text.strip().split()[0].lower()
             if cmd in ("/clonar", "/clone"):
-                parts = text.strip().split()
-                if len(parts) < 2:
-                    await tg_send_message(
-                        chat_id,
-                        "Por favor, especifique o nome para a voz clonada.\n"
-                        "<b>Exemplo:</b> <code>/clonar professor</code>"
-                    )
-                    return
-
-                profile_name = parts[1]
-                target_file_id = None
-
-                # 1. Verifica se é uma resposta (reply) a uma mensagem de voz ou áudio
-                reply = message.get("reply_to_message")
-                if reply:
-                    reply_audio = reply.get("voice") or reply.get("audio") or reply.get("document")
-                    if reply_audio:
-                        target_file_id = reply_audio.get("file_id")
-
-                # 2. Se não foi resposta direta, verifica o último áudio enviado recentemente pelo usuário
-                if not target_file_id and chat_id in _last_audio_cache:
-                    cached = _last_audio_cache[chat_id]
-                    # Aceita áudio enviado nos últimos 20 minutos (1200s)
-                    if time.time() - cached.get("timestamp", 0) < 1200:
-                        target_file_id = cached.get("file_id")
-
-                if target_file_id:
-                    await process_audio_cloning(chat_id, target_file_id, profile_name)
-                else:
-                    await tg_send_message(
-                        chat_id,
-                        "⚠️ <b>Nenhum áudio encontrado para clonar.</b>\n\n"
-                        "<b>Como fazer:</b>\n"
-                        "1. Grave ou envie um áudio de 5 a 10s no chat.\n"
-                        f"2. Em seguida, responda ao áudio com: <code>/clonar {profile_name}</code>\n"
-                        f"<i>(ou envie <code>/clonar {profile_name}</code> logo após gravar).</i>"
-                    )
+                await send_colab_cloning_guide(chat_id)
                 return
 
             elif cmd == "/start":
@@ -415,27 +337,9 @@ async def handle_telegram_update(update: dict):
         audio_obj = message.get("voice") or message.get("audio") or message.get("document")
         if audio_obj:
             file_id = audio_obj["file_id"]
-            # Salva no cache recente para permitir comando /clonar logo em seguida
             _last_audio_cache[chat_id] = {"file_id": file_id, "timestamp": time.time()}
 
-            # Verificar se veio com legenda solicitando clonagem
-            if caption and (caption.startswith("/clonar") or caption.startswith("/clone")):
-                parts = caption.strip().split()
-                if len(parts) >= 2:
-                    profile_name = parts[1]
-                    await process_audio_cloning(chat_id, file_id, profile_name)
-                    return
-                else:
-                    await tg_send_message(chat_id, "Por favor, especifique o nome. Exemplo: <code>/clonar professor</code>")
-                    return
-            else:
-                await tg_send_message(
-                    chat_id,
-                    "🎙️ <b>Áudio de voz recebido!</b>\n\n"
-                    "Para clonar esta voz para seus cartões Anki:\n"
-                    "• <b>Responda a este áudio</b> com: <code>/clonar nome_da_voz</code>\n"
-                    "• <i>Ou apenas envie <code>/clonar nome_da_voz</code> logo em seguida.</i>\n\n"
-                    "<i>Exemplo: <code>/clonar professor</code></i>"
-                )
+            await send_colab_cloning_guide(chat_id)
+            return
     except Exception as e:
         logger.error("Erro ao processar atualização: %s", e)

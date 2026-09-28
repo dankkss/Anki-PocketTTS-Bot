@@ -108,7 +108,7 @@ async def clone_pocket_voice(audio_input_path: str, profile_name: str) -> Tuple[
     Converte áudio recebido para WAV 16kHz mono e salva o perfil de voz (.safetensors).
     """
     if not POCKET_AVAILABLE:
-        return False, "O motor Pocket TTS não está instalado neste ambiente. Utilize as vozes Edge-TTS."
+        return False, "O motor de clonagem neural (Pocket TTS) foi delegado para o Google Colab (12 GB RAM) para evitar estouro de memória no Render."
 
     clean_name = sanitize_slug(profile_name)
     target_safetensors = VOICE_PROFILES_DIR / f"{clean_name}.safetensors"

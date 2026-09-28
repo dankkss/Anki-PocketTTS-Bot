@@ -4,21 +4,20 @@ Bot no Telegram para geração sob demanda de arquivos de áudio `.mp3` de alta 
 
 ---
 
-## 💡 Recursos Principais
+## 💡 Arquitetura Híbrida & Recursos
 
-1. **Motor Edge-TTS (Microsoft):**
-   - Mais de 400 vozes de estúdio com pronúncia nativa em mais de 100 idiomas (Português, Inglês US/UK, Espanhol, Francês, Japonês, Alemão, etc.).
+1. **Bot no Telegram (Edge-TTS via Render Webhook - Opção A):**
+   - Mais de 400 vozes de estúdio neurais da Microsoft com pronúncia nativa em 100+ idiomas.
    - Geração instantânea (< 1 segundo).
-   - Ajuste de velocidade calibrado para aprendizado de idiomas: `0.8x` (lento/foco auditivo), `1.0x` (normal) e `1.2x` (rápido).
+   - Ajuste de velocidade calibrado para Anki: `0.8x` (lento/foco auditivo), `1.0x` (normal) e `1.2x` (rápido).
+   - Ultraleve (~35 MB de RAM no Render), zero risco de estouro de memória e dorme quando ocioso.
 
-2. **Motor Pocket TTS (Kyutai):**
-   - Clonagem zero-shot de voz a partir de áudios curtos de 5 a 10 segundos enviados diretamente pelo Telegram.
-   - Salvamento e exportação de perfis comprimidos em `.safetensors`.
-   - Síntese de novas frases com a voz clonada (ideal para imitar a voz de professores, falantes nativos específicos ou podcasts).
+2. **Clonador de Voz & Geração em Lote (Pocket TTS via Google Colab):**
+   - [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dankkss/Anki-PocketTTS-Bot/blob/main/notebooks/Clonador_PocketTTS_Anki.ipynb)
+   - Executa no Google Colab com 12 GB de RAM e GPU T4 gratuita.
+   - Clona qualquer voz de áudio/microfone em ~5 segundos e exporta `.safetensors`.
+   - **Geração em Lote:** Permite colar uma lista de 50 ou 100 frases e baixar todos os `.mp3` empacotados em um arquivo `.zip` prontos para o Anki.
 
-3. **Arquitetura Nuvem Econômica (Render Webhook - Opção A):**
-   - Roda como Web Service em container Docker otimizado para CPU.
-   - Atende via Webhook assíncrono sob demanda, economizando a cota mensal gratuita de 750h compartilhadas do Render (dorme quando ocioso e não consome horas).
 
 ---
 

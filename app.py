@@ -19,8 +19,28 @@ logger = logging.getLogger("anki_tts.app")
 async def lifespan(app: FastAPI):
     logger.info("Pocket Anki TTS Bot iniciando na porta %s...", PORT)
     logger.info("Motor padrão: %s | Pocket TTS disponível: %s", DEFAULT_ENGINE, POCKET_AVAILABLE)
+    
+    # Registrar menu de comandos no Telegram
+    try:
+        commands = [
+            {"command": "vozes", "description": "Escolher catálogo de vozes (Edge-TTS ou Colab)"},
+            {"command": "velocidade", "description": "Ajustar velocidade da fala (0.8x, 1.0x, 1.2x)"},
+            {"command": "status", "description": "Ver status do bot e configurações"},
+            {"command": "clonar", "description": "Link e guia para clonar voz no Google Colab"},
+            {"command": "ajuda", "description": "Instruções de uso do bot"}
+        ]
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
+                json={"commands": commands}
+            )
+            logger.info("Comandos do Telegram registrados com sucesso via setMyCommands.")
+    except Exception as e:
+        logger.warning("Falha ao registrar setMyCommands: %s", e)
+
     yield
     logger.info("Encerrando Pocket Anki TTS Bot...")
+
 
 app = FastAPI(
     title="Pocket Anki TTS Bot",
