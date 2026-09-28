@@ -38,6 +38,7 @@ def save_all_settings(settings: Dict[str, Any]):
         logger.error("Erro ao salvar user_settings.json: %s", e)
 
 _user_settings_cache = load_all_settings()
+_last_audio_cache: Dict[int, Dict[str, Any]] = {}
 
 def get_user_config(chat_id: int) -> Dict[str, Any]:
     cid = str(chat_id)
@@ -143,7 +144,9 @@ async def handle_start(chat_id: int):
         "Gere arquivos .mp3 limpos e rápidos para os seus cartões do Anki.\n\n"
         "<b>Como usar:</b>\n"
         "1. <b>Texto para Áudio:</b> Envie qualquer palavra ou frase e receba o .mp3 imediatamente.\n"
-        "2. <b>Clonagem de Voz:</b> Envie uma mensagem de voz ou áudio (5 a 10s de fala clara) com a legenda: <code>/clonar nome_da_voz</code>\n\n"
+        "2. <b>Clonagem de Voz:</b>\n"
+        "• Grave ou envie um áudio (5 a 10s de fala clara).\n"
+        "• Em seguida, responda ao áudio com: <code>/clonar nome_da_voz</code> (ou simplesmente envie o comando logo após o áudio).\n\n"
         "<b>Comandos:</b>\n"
         "• /vozes — Alternar entre vozes de estúdio (Edge-TTS) e vozes clonadas (Pocket TTS)\n"
         "• /velocidade — Ajustar velocidade da fala (0.8x, 1.0x, 1.2x)\n"
@@ -349,7 +352,47 @@ async def handle_telegram_update(update: dict):
         # Comandos de texto
         if text:
             cmd = text.strip().split()[0].lower()
-            if cmd == "/start":
+            if cmd in ("/clonar", "/clone"):
+                parts = text.strip().split()
+                if len(parts) < 2:
+                    await tg_send_message(
+                        chat_id,
+                        "Por favor, especifique o nome para a voz clonada.\n"
+                        "<b>Exemplo:</b> <code>/clonar professor</code>"
+                    )
+                    return
+
+                profile_name = parts[1]
+                target_file_id = None
+
+                # 1. Verifica se é uma resposta (reply) a uma mensagem de voz ou áudio
+                reply = message.get("reply_to_message")
+                if reply:
+                    reply_audio = reply.get("voice") or reply.get("audio") or reply.get("document")
+                    if reply_audio:
+                        target_file_id = reply_audio.get("file_id")
+
+                # 2. Se não foi resposta direta, verifica o último áudio enviado recentemente pelo usuário
+                if not target_file_id and chat_id in _last_audio_cache:
+                    cached = _last_audio_cache[chat_id]
+                    # Aceita áudio enviado nos últimos 20 minutos (1200s)
+                    if time.time() - cached.get("timestamp", 0) < 1200:
+                        target_file_id = cached.get("file_id")
+
+                if target_file_id:
+                    await process_audio_cloning(chat_id, target_file_id, profile_name)
+                else:
+                    await tg_send_message(
+                        chat_id,
+                        "⚠️ <b>Nenhum áudio encontrado para clonar.</b>\n\n"
+                        "<b>Como fazer:</b>\n"
+                        "1. Grave ou envie um áudio de 5 a 10s no chat.\n"
+                        f"2. Em seguida, responda ao áudio com: <code>/clonar {profile_name}</code>\n"
+                        f"<i>(ou envie <code>/clonar {profile_name}</code> logo após gravar).</i>"
+                    )
+                return
+
+            elif cmd == "/start":
                 await handle_start(chat_id)
             elif cmd == "/ajuda":
                 await handle_start(chat_id)
@@ -368,7 +411,10 @@ async def handle_telegram_update(update: dict):
         audio_obj = message.get("voice") or message.get("audio") or message.get("document")
         if audio_obj:
             file_id = audio_obj["file_id"]
-            # Verificar se a legenda solicita clonagem
+            # Salva no cache recente para permitir comando /clonar logo em seguida
+            _last_audio_cache[chat_id] = {"file_id": file_id, "timestamp": time.time()}
+
+            # Verificar se veio com legenda solicitando clonagem
             if caption and (caption.startswith("/clonar") or caption.startswith("/clone")):
                 parts = caption.strip().split()
                 if len(parts) >= 2:
@@ -381,7 +427,11 @@ async def handle_telegram_update(update: dict):
             else:
                 await tg_send_message(
                     chat_id,
-                    "Para clonar esta voz para cartões Anki, reenvie o áudio com a legenda:\n<code>/clonar nome_da_voz</code>"
+                    "🎙️ <b>Áudio de voz recebido!</b>\n\n"
+                    "Para clonar esta voz para seus cartões Anki:\n"
+                    "• <b>Responda a este áudio</b> com: <code>/clonar nome_da_voz</code>\n"
+                    "• <i>Ou apenas envie <code>/clonar nome_da_voz</code> logo em seguida.</i>\n\n"
+                    "<i>Exemplo: <code>/clonar professor</code></i>"
                 )
     except Exception as e:
         logger.error("Erro ao processar atualização: %s", e)

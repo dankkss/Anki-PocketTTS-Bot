@@ -25,7 +25,7 @@ Bot no Telegram para geração sob demanda de arquivos de áudio `.mp3` de alta 
 ## 📱 Como Usar no Telegram (@dankkss_ankitts_bot)
 
 - **Gerar áudio de texto:** Envie qualquer palavra ou frase. O bot responde imediatamente com o arquivo `.mp3` com título e tags prontas para o Anki.
-- **Clonar uma voz:** Envie uma mensagem de voz ou arquivo de áudio com a legenda `/clonar <nome>` (exemplo: `/clonar professor`).
+- **Clonar uma voz:** Grave um áudio pelo microfone ou envie um arquivo de áudio (5 a 10s) e depois responda a ele com `/clonar <nome>` (ou simplesmente envie `/clonar <nome>` logo após enviar o áudio).
 - **Selecionar vozes:** Digite `/vozes` para escolher entre vozes de estúdio (Edge-TTS) e perfis clonados (Pocket TTS).
 - **Ajustar ritmo:** Digite `/velocidade` para selecionar 0.8x, 1.0x ou 1.2x.
 - **Ver status:** Digite `/status` para checar as preferências ativas e perfis salvos.
