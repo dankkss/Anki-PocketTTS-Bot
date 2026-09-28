@@ -1,0 +1,35 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Segredos e Configurações Locais (Regra 1 - Zero-Leak Estrito)
+.env
+.env.*
+config.json
+/root/.config/
+*.session
+*.session-journal
+data/bot_settings.db
+
+# Perfis clonados pesados (mantendo a pasta via .gitkeep)
+data/voice_profiles/*
+!data/voice_profiles/.gitkeep
+voice_profiles/*
+!voice_profiles/.gitkeep
+
+# Áudios temporários
+temp/
+temp_audio/
+/tmp/anki_tts_audio/
+*.wav
+*.mp3
+*.ogg
+
+# Estado de usuário em runtime
+user_settings.json
+
+# IDEs e Sistema Operacional
+.vscode/
+.idea/
+.DS_Store
