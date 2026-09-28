@@ -72,11 +72,10 @@ async def telegram_webhook(
         logger.error("Payload JSON inválido no webhook: %s", e)
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # Processamento assíncrono da atualização
-    try:
-        await handle_telegram_update(update_data)
-    except Exception as e:
-        logger.error("Erro no processamento da atualização: %s", e)
+    # Processamento assíncrono em background para responder ao Telegram imediatamente (< 50ms)
+    # Isso impede timeouts do Telegram e evita reenvios repetidos de mensagens demoradas
+    import asyncio
+    asyncio.create_task(handle_telegram_update(update_data))
 
     return {"ok": True}
 
