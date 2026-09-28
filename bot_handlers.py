@@ -73,6 +73,10 @@ async def tg_send_message(chat_id: int, text: str, reply_markup: Optional[dict] 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
             resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                # Se falhar (ex: erro de parse HTML da API do Telegram), tenta sem parse_mode
+                payload.pop("parse_mode", None)
+                resp = await client.post(url, json=payload)
             return resp.status_code == 200
     except Exception as e:
         logger.error("Falha ao enviar mensagem Telegram: %s", e)

@@ -59,6 +59,15 @@ def get_pocket_model():
         return None
     if _pocket_model_instance is None:
         try:
+            hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
+            if hf_token:
+                os.environ["HF_TOKEN"] = hf_token
+                os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
+                try:
+                    import huggingface_hub
+                    huggingface_hub.login(token=hf_token, add_to_git_credential=False)
+                except Exception:
+                    pass
             logger.info("Carregando modelo Pocket TTS...")
             _pocket_model_instance = TTSModel.load_model()
             logger.info("Modelo Pocket TTS carregado com sucesso.")
